@@ -193,11 +193,10 @@ async function handleApi(req, res) {
       if (!completed) {
         const nextPlayer = game.players[game.currentTurn];
         if (nextPlayer.type === 'ai') {
-          const board = game.board.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
-          const opponentIds = game.players.filter((p) => p.id !== nextPlayer.id).map((p) => p.id);
+          const sourceBoard = game.boards[nextPlayer.id] || [];
+          const board = sourceBoard.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
           const aiMove = await chooseMove(board, nextPlayer.id, {
-            difficulty: nextPlayer.difficulty,
-            opponentIds
+            difficulty: nextPlayer.difficulty
           });
           const autoMove = {
             ...aiMove,

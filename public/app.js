@@ -2,6 +2,7 @@ const state = {
   token: null,
   user: null,
   authMode: 'login',
+  stage: 'auth',
   dictionaryWords: 0,
   error: null,
   mode: 'local',
@@ -14,11 +15,72 @@ const state = {
   availableGames: [],
   game: null,
   controlledPlayerId: null,
+  viewingPlayerId: null,
+  needsPrivacyPrompt: false,
   selectedLetter: 'A',
   websocket: null
 };
 
 const palette = ['#38bdf8', '#f97316', '#22c55e', '#a855f7'];
+
+function setStage(stage) {
+  if (state.stage === stage) {
+    if (document.body.dataset.stage !== stage) {
+      document.body.dataset.stage = stage;
+    }
+    return;
+  }
+  state.stage = stage;
+  if (stage !== 'play') {
+    state.needsPrivacyPrompt = false;
+  }
+  document.body.dataset.stage = stage;
+}
+
+function syncViewingPlayer(game) {
+  if (!game) {
+    state.viewingPlayerId = null;
+    state.needsPrivacyPrompt = false;
+    return;
+  }
+
+  if (game.mode === 'local') {
+    const activePlayer =
+      game.status === 'completed'
+        ? state.viewingPlayerId || (game.players[0] ? game.players[0].id : null)
+        : game.players[game.currentTurn]?.id || null;
+    if (activePlayer && state.viewingPlayerId !== activePlayer) {
+      state.viewingPlayerId = activePlayer;
+      if (game.status === 'active') {
+        state.needsPrivacyPrompt = true;
+      }
+    }
+    if (game.status !== 'active') {
+      state.needsPrivacyPrompt = false;
+    }
+  } else {
+    if (state.controlledPlayerId) {
+      state.viewingPlayerId = state.controlledPlayerId;
+    } else {
+      const human = game.players.find((player) => player.type !== 'ai');
+      if (human) {
+        state.viewingPlayerId = human.id;
+      }
+    }
+    state.needsPrivacyPrompt = false;
+  }
+}
+
+function applyGameUpdate(game, options = {}) {
+  state.game = game;
+  syncViewingPlayer(game);
+  if (game && game.status === 'completed') {
+    state.needsPrivacyPrompt = false;
+  }
+  if (!options.preserveStage && game) {
+    setStage('play');
+  }
+}
 
 function api(path, options = {}) {
   const headers = options.headers || {};
@@ -57,6 +119,13 @@ function renderAuthActions() {
       state.token = null;
       state.user = null;
       state.controlledPlayerId = null;
+      state.viewingPlayerId = null;
+      state.game = null;
+      if (state.websocket) {
+        state.websocket.close();
+        state.websocket = null;
+      }
+      setStage('auth');
       renderAll();
     });
     container.appendChild(logout);
@@ -70,16 +139,37 @@ function renderAuthActions() {
     });
     container.appendChild(login);
   }
+
+  if (state.game) {
+    const navButton = document.createElement('button');
+    navButton.className = 'button ghost';
+    if (state.stage === 'play') {
+      navButton.textContent = 'Back to setup';
+      navButton.addEventListener('click', () => {
+        setStage('setup');
+        renderAll();
+      });
+    } else {
+      navButton.textContent = 'Go to board';
+      navButton.addEventListener('click', () => {
+        setStage('play');
+        renderAll();
+      });
+    }
+    container.appendChild(navButton);
+  }
 }
 
 function renderAuthPanel() {
   const panel = document.getElementById('auth-panel');
+  if (state.stage !== 'auth') {
+    panel.innerHTML = '';
+    return;
+  }
+
   if (state.user) {
-    panel.innerHTML = `
-      <div class="section-title">Profile</div>
-      <p>Signed in as <strong>${state.user.username}</strong></p>
-      <p class="muted">Games played: ${state.user.games_played} · Average score: ${state.user.average_points.toFixed(2)}</p>
-    `;
+    setStage('setup');
+    renderAll();
     return;
   }
 
@@ -91,6 +181,7 @@ function renderAuthPanel() {
         <input class="input" required name="password" type="password" placeholder="Password" />
         <button class="button full" type="submit">Sign in</button>
       </form>
+      <button class="button ghost full" type="button" id="continue-guest">Continue as guest</button>
       ${state.error ? `<div class="alert">${state.error}</div>` : ''}
     `;
     panel.querySelector('#login-form').addEventListener('submit', async (event) => {
@@ -105,6 +196,7 @@ function renderAuthPanel() {
         state.token = token;
         state.error = null;
         state.controlledPlayerId = null;
+        setStage('setup');
         renderAll();
       } catch (error) {
         state.error = error.message;
@@ -120,6 +212,7 @@ function renderAuthPanel() {
         <input class="input" required name="password" type="password" placeholder="Password" />
         <button class="button full" type="submit">Register</button>
       </form>
+      <button class="button ghost full" type="button" id="continue-guest">Continue as guest</button>
       ${state.error ? `<div class="alert">${state.error}</div>` : ''}
     `;
     panel.querySelector('#register-form').addEventListener('submit', async (event) => {
@@ -133,6 +226,7 @@ function renderAuthPanel() {
         state.user = user;
         state.token = token;
         state.error = null;
+        setStage('setup');
         renderAll();
       } catch (error) {
         state.error = error.message;
@@ -140,10 +234,79 @@ function renderAuthPanel() {
       }
     });
   }
+
+  const guestButton = panel.querySelector('#continue-guest');
+  if (guestButton) {
+    guestButton.addEventListener('click', () => {
+      state.error = null;
+      setStage('setup');
+      renderAll();
+    });
+  }
+}
+
+function renderProfilePanel() {
+  const panel = document.getElementById('profile-panel');
+  if (state.stage === 'auth') {
+    panel.innerHTML = '';
+    return;
+  }
+
+  const username = state.user ? state.user.username : 'Guest player';
+  const gamesPlayed = state.user?.games_played ?? 0;
+  const averagePoints = Number(state.user?.average_points ?? 0);
+  const subtitle = state.user
+    ? `Games played: ${gamesPlayed} · Average score: ${averagePoints.toFixed(2)}`
+    : 'Playing without an account – progress will not be saved.';
+
+  const badge = state.game ? `<div class="badge">${state.game.status.toUpperCase()}</div>` : '';
+  const dictionaryNote = state.dictionaryWords
+    ? `<p class="muted" style="margin-top: 0.75rem;">Dictionary cache: ${state.dictionaryWords.toLocaleString()} short words ready.</p>`
+    : '';
+
+  const actions = [];
+  if (state.stage === 'setup' && state.game && state.game.status !== 'completed') {
+    actions.push('<button class="button full" id="resume-game">Resume active match</button>');
+  }
+  if (state.stage === 'play') {
+    actions.push('<button class="button ghost full" id="back-to-setup">Back to setup</button>');
+  }
+
+  panel.innerHTML = `
+    <div class="flex-between" style="gap: 1rem; align-items: flex-start;">
+      <div>
+        <div class="section-title">${username}</div>
+        <p class="muted">${subtitle}</p>
+      </div>
+      ${badge}
+    </div>
+    ${dictionaryNote}
+    ${actions.length ? `<div class="grid-layout" style="margin-top:1rem; gap:0.75rem; grid-template-columns: 1fr;">${actions.join('')}</div>` : ''}
+  `;
+
+  const resume = panel.querySelector('#resume-game');
+  if (resume) {
+    resume.addEventListener('click', () => {
+      setStage('play');
+      renderAll();
+    });
+  }
+
+  const back = panel.querySelector('#back-to-setup');
+  if (back) {
+    back.addEventListener('click', () => {
+      setStage('setup');
+      renderAll();
+    });
+  }
 }
 
 function renderGameSetup() {
   const panel = document.getElementById('game-setup');
+  if (state.stage !== 'setup') {
+    panel.innerHTML = '';
+    return;
+  }
   const modeButtons = ['local', 'single', 'online']
     .map(
       (mode) => `
@@ -266,8 +429,8 @@ function renderGameSetup() {
           method: 'POST',
           body: { mode: 'local', hostName, players }
         });
-        state.game = game;
         state.controlledPlayerId = null;
+        applyGameUpdate(game);
         connectWebSocket(game.id);
         renderAll();
       } catch (error) {
@@ -302,9 +465,9 @@ function renderGameSetup() {
             aiDifficulty: state.aiDifficulty
           }
         });
-        state.game = game;
         const player = game.players.find((p) => p.type !== 'ai');
         state.controlledPlayerId = player ? player.id : null;
+        applyGameUpdate(game);
         connectWebSocket(game.id);
         renderAll();
       } catch (error) {
@@ -331,9 +494,9 @@ function renderGameSetup() {
             hostName: state.onlineName
           }
         });
-        state.game = game;
         const player = game.players[0];
         state.controlledPlayerId = player.id;
+        applyGameUpdate(game);
         connectWebSocket(game.id);
         renderAll();
       } catch (error) {
@@ -373,9 +536,9 @@ async function joinOnlineGame(gameId) {
       method: 'POST',
       body: { username: state.onlineName }
     });
-    state.game = game;
     const player = game.players.find((p) => p.username === state.onlineName);
     state.controlledPlayerId = player ? player.id : null;
+    applyGameUpdate(game);
     connectWebSocket(game.id);
     renderAll();
   } catch (error) {
@@ -385,24 +548,45 @@ async function joinOnlineGame(gameId) {
 
 function renderBoardPanel() {
   const panel = document.getElementById('board-panel');
+  if (state.stage !== 'play') {
+    panel.innerHTML = `
+      <div class="section-title">Game Board</div>
+      <p class="muted">Start or resume a match from the setup screen to access your board.</p>
+    `;
+    return;
+  }
+
   if (!state.game) {
     panel.innerHTML = `
       <div class="section-title">Game Board</div>
-      <p class="muted">Create or join a game to begin placing letters.</p>
+      <p class="muted">No active match. Visit the setup stage to configure a game.</p>
+    `;
+    return;
+  }
+
+  const viewingPlayer = state.game.players.find((player) => player.id === state.viewingPlayerId) || state.game.players[0];
+  const viewingIndex = state.game.players.findIndex((player) => player.id === viewingPlayer?.id);
+  const board = viewingPlayer ? state.game.boards?.[viewingPlayer.id] : null;
+
+  if (!viewingPlayer || !board) {
+    panel.innerHTML = `
+      <div class="section-title">Game Board</div>
+      <p class="muted">Waiting for your board to become available…</p>
     `;
     return;
   }
 
   const playersMarkup = state.game.players
     .map((player, index) => {
-      const score = (state.game.summary?.totals?.[player.id]) || 0;
+      const score = state.game.summary?.totals?.[player.id] || 0;
       const active = state.game.status === 'active' && state.game.players[state.game.currentTurn].id === player.id;
+      const viewing = player.id === viewingPlayer.id;
       const color = palette[index % palette.length];
       return `
         <div class="player-card ${active ? 'active' : ''}" style="border-left: 4px solid ${color};">
           <div>
             <div class="name">${player.username}</div>
-            <div class="muted">${player.type === 'ai' ? `AI · ${player.difficulty}` : 'Human'}</div>
+            <div class="muted">${player.type === 'ai' ? `AI · ${player.difficulty}` : 'Human'}${viewing ? ' • Viewing' : ''}</div>
           </div>
           <div class="score">${score}</div>
         </div>
@@ -410,68 +594,104 @@ function renderBoardPanel() {
     })
     .join('');
 
-  const boardMarkup = state.game.board
+  const letterColor = palette[(viewingIndex >= 0 ? viewingIndex : 0) % palette.length];
+  const boardMarkup = board
     .map((row, rowIndex) =>
       row
-        .map((cell, colIndex) => {
-          const playerIndex = cell
-            ? state.game.players.findIndex((player) => player.id === cell.playerId)
-            : -1;
-          const color = playerIndex >= 0 ? palette[playerIndex % palette.length] : 'transparent';
-          return `
-            <div class="cell ${cell ? 'filled' : ''}" data-row="${rowIndex}" data-col="${colIndex}" style="color: ${color};">
-              ${cell ? cell.letter : ''}
-            </div>
-          `;
-        })
+        .map((cell, colIndex) => `
+          <div class="cell ${cell ? 'filled' : ''}" data-row="${rowIndex}" data-col="${colIndex}" style="color: ${cell ? letterColor : 'inherit'};">
+            ${cell ? cell.letter : ''}
+          </div>
+        `)
         .join('')
     )
     .join('');
 
+  const canMove =
+    state.game.status === 'active' &&
+    !state.needsPrivacyPrompt &&
+    state.game.players[state.game.currentTurn]?.id === viewingPlayer.id;
+
+  const statusMessage = (() => {
+    if (state.game.status === 'waiting') {
+      return 'Waiting for additional players to join.';
+    }
+    if (state.game.status === 'completed') {
+      return 'Match complete. Review your final board and summary.';
+    }
+    if (canMove) {
+      return 'Select a letter and tap a cell to place it on your grid.';
+    }
+    const current = state.game.players[state.game.currentTurn];
+    return `Waiting for ${current.username} to take a turn.`;
+  })();
+
   const keyboard = Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index))
-    .map((letter) => `<div class="key ${state.selectedLetter === letter ? 'active' : ''}" data-letter="${letter}">${letter}</div>`)
+    .map((letter) => `
+      <div class="key ${state.selectedLetter === letter ? 'active' : ''} ${canMove ? '' : 'disabled'}" data-letter="${letter}">
+        ${letter}
+      </div>
+    `)
     .join('');
+
+  const overlay =
+    state.game.mode === 'local' &&
+    state.needsPrivacyPrompt &&
+    state.game.status === 'active'
+      ? `
+        <div class="privacy-overlay">
+          <div class="section-title" style="margin:0;">${viewingPlayer.username}, it's your turn!</div>
+          <p>Ask the other players to look away, then reveal your board to place the next letter.</p>
+          <button class="button" id="reveal-board">Reveal board</button>
+        </div>
+      `
+      : '';
 
   panel.innerHTML = `
     <div class="flex-between">
-      <div class="section-title">Game Board</div>
+      <div>
+        <div class="section-title">Game Board</div>
+        <p class="muted">Viewing board for <strong>${viewingPlayer.username}</strong></p>
+      </div>
       <div class="badge">${state.game.status.toUpperCase()}</div>
     </div>
     <div class="players">${playersMarkup}</div>
-    <div class="board">${boardMarkup}</div>
+    <div class="board-panel-wrapper">
+      ${overlay}
+      <div class="board">${boardMarkup}</div>
+    </div>
     <div class="section-title" style="margin-top:1.5rem;">Letter Selection</div>
     <div class="keyboard">${keyboard}</div>
+    <p class="muted" style="margin-top:0.75rem;">${statusMessage}</p>
   `;
 
-  panel.querySelectorAll('.cell').forEach((cell) => {
-    cell.addEventListener('click', () => {
-      const row = Number(cell.dataset.row);
-      const col = Number(cell.dataset.col);
-      if (state.game.status !== 'active') {
-        return;
-      }
-      if (state.game.board[row][col]) {
-        return;
-      }
-      const currentPlayer = state.game.players[state.game.currentTurn];
-      if (currentPlayer.type === 'ai') {
-        alert('AI is thinking...');
-        return;
-      }
-      if (state.controlledPlayerId && currentPlayer.id !== state.controlledPlayerId) {
-        alert('Waiting for your turn.');
-        return;
-      }
-      submitMove(row, col, state.selectedLetter);
-    });
-  });
-
-  panel.querySelectorAll('.key').forEach((key) => {
-    key.addEventListener('click', () => {
-      state.selectedLetter = key.dataset.letter;
+  const reveal = panel.querySelector('#reveal-board');
+  if (reveal) {
+    reveal.addEventListener('click', () => {
+      state.needsPrivacyPrompt = false;
       renderBoardPanel();
     });
-  });
+  }
+
+  if (canMove) {
+    panel.querySelectorAll('.cell').forEach((cell) => {
+      cell.addEventListener('click', () => {
+        const row = Number(cell.dataset.row);
+        const col = Number(cell.dataset.col);
+        if (board[row][col]) {
+          return;
+        }
+        submitMove(row, col, state.selectedLetter);
+      });
+    });
+
+    panel.querySelectorAll('.key').forEach((key) => {
+      key.addEventListener('click', () => {
+        state.selectedLetter = key.dataset.letter;
+        renderBoardPanel();
+      });
+    });
+  }
 }
 
 async function submitMove(row, col, letter) {
@@ -480,13 +700,13 @@ async function submitMove(row, col, letter) {
     const { game } = await api(`/api/games/${state.game.id}/move`, {
       method: 'POST',
       body: {
-        playerId: state.game.players[state.game.currentTurn].id,
+        playerId: state.viewingPlayerId,
         row,
         col,
         letter
       }
     });
-    state.game = game;
+    applyGameUpdate(game, { preserveStage: true });
     renderAll();
   } catch (error) {
     alert(error.message);
@@ -495,28 +715,68 @@ async function submitMove(row, col, letter) {
 
 function renderSummaryPanel() {
   const panel = document.getElementById('summary-panel');
-  if (!state.game || !state.game.summary) {
+  if (state.stage !== 'play') {
+    panel.innerHTML = '';
+    return;
+  }
+
+  if (!state.game) {
     panel.innerHTML = `
       <div class="section-title">Match Summary</div>
-      <p class="muted">Completed games will display detailed scoring breakdown here.</p>
+      <p class="muted">Start a match to see scoring details.</p>
     `;
     return;
   }
 
-  const lines = state.game.summary.lines
+  if (!state.game.summary) {
+    const waitingCopy = state.game.status === 'active'
+      ? 'Complete the game to view your scoring breakdown.'
+      : 'No scoring details are available yet.';
+    panel.innerHTML = `
+      <div class="section-title">Match Summary</div>
+      <p class="muted">${waitingCopy}</p>
+    `;
+    return;
+  }
+
+  const viewingPlayer = state.game.players.find((player) => player.id === state.viewingPlayerId) || state.game.players[0];
+  if (!viewingPlayer) {
+    panel.innerHTML = `
+      <div class="section-title">Match Summary</div>
+      <p class="muted">Select a player to review their results.</p>
+    `;
+    return;
+  }
+
+  const totals = state.game.summary.totals || {};
+  const scoreboardLines = state.game.players
+    .map((player, index) => {
+      const score = totals[player.id] || 0;
+      const label = player.id === viewingPlayer.id ? 'Your final score' : 'Opponent score';
+      const color = palette[index % palette.length];
+      return `
+        <div class="summary-line">
+          <div>
+            <div class="label" style="color:${color};">${player.username}</div>
+            <div class="muted">${label}</div>
+          </div>
+          <div class="word">${score}</div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const personalLines = state.game.summary.lines
+    .filter((line) => line.playerId === viewingPlayer.id || line.ownerIds?.includes(viewingPlayer.id))
     .map((line) => {
       const label = `${line.type === 'row' ? 'Row' : 'Column'} ${line.index + 1}`;
-      const owners = line.ownerIds
-        .map((id) => state.game.players.find((player) => player.id === id)?.username)
-        .filter(Boolean)
-        .join(', ');
       return `
         <div class="summary-line">
           <div>
             <div class="label">${label}</div>
-            <div class="muted">${owners || '—'}</div>
+            <div class="muted">${line.text}</div>
           </div>
-          <div class="word">${line.text} · +${line.score}</div>
+          <div class="word">+${line.score}</div>
         </div>
       `;
     })
@@ -524,7 +784,10 @@ function renderSummaryPanel() {
 
   panel.innerHTML = `
     <div class="section-title">Match Summary</div>
-    <div class="summary">${lines || '<p>No scoring sequences.</p>'}</div>
+    <p class="muted">Final totals</p>
+    <div class="summary">${scoreboardLines}</div>
+    <p class="muted" style="margin-top:1.25rem;">${viewingPlayer.username}'s longest words</p>
+    <div class="summary">${personalLines || '<p class="muted">No valid words were recorded.</p>'}</div>
   `;
 }
 
@@ -555,8 +818,10 @@ function renderLeaderboardPanel() {
 }
 
 function renderAll() {
+  document.body.dataset.stage = state.stage;
   renderAuthActions();
   renderAuthPanel();
+  renderProfilePanel();
   renderGameSetup();
   renderBoardPanel();
   renderSummaryPanel();
@@ -607,8 +872,8 @@ function connectWebSocket(gameId) {
   ws.addEventListener('message', (event) => {
     try {
       const payload = JSON.parse(event.data);
-      if (payload.type === 'game:updated' && state.game && payload.game.id === state.game.id) {
-        state.game = payload.game;
+      if (payload.type === 'game:updated' && (!state.game || payload.game.id === state.game.id)) {
+        applyGameUpdate(payload.game, { preserveStage: true });
         renderAll();
       }
       if (payload.type === 'game:created') {
@@ -625,7 +890,10 @@ function connectWebSocket(gameId) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (!state.game) return;
+  if (!state.game || state.stage !== 'play' || state.needsPrivacyPrompt) return;
+  if (state.game.status !== 'active') return;
+  const current = state.game.players[state.game.currentTurn];
+  if (!current || current.id !== state.viewingPlayerId) return;
   const key = event.key.toUpperCase();
   if (key >= 'A' && key <= 'Z') {
     state.selectedLetter = key;

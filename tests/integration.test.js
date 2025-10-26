@@ -23,19 +23,24 @@ test('records moves and completes game flow', async () => {
   const game = createTestGame();
   const players = game.players;
   let updated = game;
-  let currentIndex = 0;
+  let placementIndex = 0;
 
-  for (let row = 0; row < 4; row += 1) {
+  outer: for (let row = 0; row < 4; row += 1) {
     for (let col = 0; col < 4; col += 1) {
-      const move = {
-        playerId: players[currentIndex].id,
-        row,
-        col,
-        letter: String.fromCharCode(65 + ((row * 4 + col) % 26))
-      };
-      const result = await recordMove(game.id, move);
-      updated = result.game;
-      currentIndex = updated.currentTurn;
+      for (const player of players) {
+        const move = {
+          playerId: player.id,
+          row,
+          col,
+          letter: String.fromCharCode(65 + (placementIndex % 26))
+        };
+        placementIndex += 1;
+        const result = await recordMove(game.id, move);
+        updated = result.game;
+        if (updated.status === 'completed') {
+          break outer;
+        }
+      }
     }
   }
 

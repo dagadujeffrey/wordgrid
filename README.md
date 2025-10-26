@@ -1,6 +1,6 @@
 # WordGrid
 
-WordGrid is a strategic 4×4 word building arena featuring local hot-seat play, online multiplayer lobbies, and adaptive AI opponents. Players take turns placing letters on the board to form the strongest possible horizontal and vertical words. At the end of each match the board is scored using an offline dictionary and each contender earns points for the longest valid words that include their letters.
+WordGrid is a strategic 4×4 word building arena featuring local hot-seat play, online multiplayer lobbies, and adaptive AI opponents. Every contender maintains a private grid: on their turn they propose a letter and decide where to place it on their own board. When the dust settles, each board is scored against an offline dictionary and points are awarded for the longest valid horizontal and vertical words.
 
 ## Features
 
@@ -11,7 +11,7 @@ WordGrid is a strategic 4×4 word building arena featuring local hot-seat play, 
 - **Deterministic scoring** that inspects every row and column, awards only the longest valid words, and updates the leaderboard.
 - **Offline-first dictionary** with automatic caching and optional online bootstrap on first run.
 - **Persistent stats** stored in a JSON data file (users, games, leaderboard).
-- **Modern UI** built with a Tailwind-inspired utility palette for responsive layouts and real-time board updates.
+- **Modern UI** built with a Tailwind-inspired utility palette, a guided Sign-in → Setup → Play flow, and privacy prompts for local turn swaps.
 - **Automated tests** using the built-in `node:test` runner for scoring, AI decision making, and integration flows.
 
 ## Getting Started
@@ -57,10 +57,10 @@ tests/             # node:test specifications
 
 ## Gameplay Overview
 
-1. Each turn a player places one letter (A–Z) on any empty square.
-2. Once the 4×4 grid is filled the match ends and scoring begins.
+1. Each challenger has a personal 4×4 grid. On their turn they pick a letter (A–Z) and drop it into any empty square on their own board.
+2. When every board is completely filled, the match ends and scoring begins.
 3. For every row and column, the longest contiguous dictionary word earns points equal to its length (2–4).
-4. Every player with at least one letter inside that word earns the points.
+4. Scores are tracked per board, so your private placements alone determine your total.
 5. Leaderboard standings are ranked by average score across completed games.
 
 Enjoy plotting out the strongest words, blocking your rivals, and climbing the global board!

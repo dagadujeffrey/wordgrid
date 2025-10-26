@@ -1,4 +1,4 @@
-const { cloneBoard, applyMove, scoreBoard, getAvailableMoves } = require('./game');
+const { cloneBoard, applyMove, scoreBoard } = require('./game');
 
 const LETTER_FREQUENCY = 'EEEEEEEEEEEEAAAAAAAARRRRRRRRRRIIIIIIOOOOOOOOOOTTTTTTTTTLLLLSSSSUUUNNNNDDDGGBBCCMMPPFFHHVVWWYYKJXQZ';
 
@@ -11,48 +11,22 @@ function randomChoice(items) {
   return items[Math.floor(Math.random() * items.length)];
 }
 
-async function evaluateMove(board, move, playerId, opponentIds) {
+async function evaluateMove(board, move, playerId) {
   const temp = cloneBoard(board);
   applyMove(temp, { ...move, playerId });
   const { totals } = await scoreBoard(temp);
   const playerScore = totals[playerId] || 0;
-  const opponentScore = opponentIds.reduce((sum, id) => sum + (totals[id] || 0), 0);
   const centerBias = 1 - (Math.abs(1.5 - move.row) + Math.abs(1.5 - move.col)) * 0.1;
-  const offensiveBonus = playerScore * 0.1;
+  const coverage = Math.max(playerScore, 0) * 0.1;
   return {
-    net: playerScore - opponentScore + centerBias + offensiveBonus,
+    net: playerScore + centerBias + coverage,
     playerScore,
-    opponentScore,
     centerBias
   };
 }
 
-async function evaluateOpponentResponse(board, move, playerId, opponentIds) {
-  if (!opponentIds.length) return 0;
-  const temp = cloneBoard(board);
-  applyMove(temp, { ...move, playerId });
-  const available = getAvailableMoves(temp);
-  let worst = 0;
-  for (const opponentId of opponentIds) {
-    let best = -Infinity;
-    for (const candidate of available) {
-      const testBoard = cloneBoard(temp);
-      applyMove(testBoard, { ...candidate, playerId: opponentId, letter: candidate.letter });
-      const { totals } = await scoreBoard(testBoard);
-      const score = (totals[opponentId] || 0) - (totals[playerId] || 0);
-      if (score > best) {
-        best = score;
-      }
-    }
-    if (best > worst) {
-      worst = best;
-    }
-  }
-  return worst;
-}
-
 async function chooseMove(board, playerId, options = {}) {
-  const { difficulty = 'medium', opponentIds = [] } = options;
+  const { difficulty = 'medium' } = options;
   const availableCells = [];
   for (let row = 0; row < board.length; row += 1) {
     for (let col = 0; col < board[row].length; col += 1) {
@@ -79,27 +53,26 @@ async function chooseMove(board, playerId, options = {}) {
 
   const scored = [];
   for (const move of candidateMoves) {
-    const { net, playerScore } = await evaluateMove(board, move, playerId, opponentIds);
+    const { net, playerScore } = await evaluateMove(board, move, playerId);
     let adjusted = net;
     if (difficulty === 'medium') {
-      const punishment = await evaluateOpponentResponse(board, move, playerId, opponentIds);
-      adjusted -= punishment * 0.5;
+      adjusted = net * 1.05;
     } else if (difficulty === 'hard') {
-      const punishment = await evaluateOpponentResponse(board, move, playerId, opponentIds);
-      adjusted = net * 1.2 - punishment + playerScore;
+      const depthBonus = playerScore * 0.5;
+      adjusted = net * 1.2 + depthBonus;
     }
-    scored.push({ move, score: adjusted, playerScore });
+    scored.push({ move, score: adjusted });
   }
 
   const bestScore = Math.max(...scored.map((item) => item.score));
-  const bestMoves = scored.filter((item) => Math.abs(item.score - bestScore) < 0.05);
+  const tolerance = difficulty === 'hard' ? 0.01 : 0.1;
+  const bestMoves = scored.filter((item) => Math.abs(item.score - bestScore) <= tolerance);
   return randomChoice(bestMoves).move;
 }
 
 module.exports = {
   chooseMove,
   __test: {
-    evaluateMove,
-    evaluateOpponentResponse
+    evaluateMove
   }
 };

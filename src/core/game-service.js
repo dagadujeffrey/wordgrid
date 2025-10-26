@@ -1,5 +1,5 @@
 const { loadStore, saveStore, createId, upsertLeaderboard } = require('./store');
-const { createEmptyBoard, applyMove, scoreBoard, isBoardFull, cloneBoard } = require('./game');
+const { createEmptyBoard, applyMove, scoreBoard, isBoardFull } = require('./game');
 
 function sanitizeGame(game) {
   return JSON.parse(JSON.stringify(game));
@@ -29,11 +29,16 @@ function createGame({ mode, host, players = [], aiDifficulty = 'medium' }) {
     });
   }
 
+  const boards = {};
+  gamePlayers.forEach((player) => {
+    boards[player.id] = createEmptyBoard();
+  });
+
   const game = {
     id: createId('game'),
     mode,
     status: mode === 'online' ? 'waiting' : 'active',
-    board: createEmptyBoard(),
+    boards,
     moves: [],
     players: gamePlayers,
     currentTurn: 0,
@@ -60,7 +65,9 @@ function joinGame(gameId, player) {
   if (game.status !== 'waiting') {
     throw new Error('Game is not joinable');
   }
-  game.players.push(createPlayerEntry(player));
+  const entry = createPlayerEntry(player);
+  game.players.push(entry);
+  game.boards[entry.id] = createEmptyBoard();
   if (game.players.length >= 2) {
     game.status = 'active';
   }
@@ -81,14 +88,28 @@ async function recordMove(gameId, move) {
   if (playerIndex !== game.currentTurn) {
     throw new Error('Not this player\'s turn');
   }
-  applyMove(game.board, move);
+  const board = game.boards[move.playerId];
+  if (!board) {
+    throw new Error('Player board unavailable');
+  }
+  applyMove(board, move);
   game.moves.push({ ...move, timestamp: new Date().toISOString() });
   game.currentTurn = (game.currentTurn + 1) % game.players.length;
   game.updatedAt = new Date().toISOString();
 
   let completed = false;
-  if (isBoardFull(game.board)) {
-    const scoring = await scoreBoard(game.board);
+  const allBoardsFilled = game.players.every((player) => isBoardFull(game.boards[player.id]));
+  if (allBoardsFilled) {
+    const totals = {};
+    const lines = [];
+    for (const player of game.players) {
+      const result = await scoreBoard(game.boards[player.id]);
+      totals[player.id] = (result.totals[player.id] || 0);
+      result.lines.forEach((line) => {
+        lines.push({ ...line, playerId: player.id });
+      });
+    }
+    const scoring = { totals, lines };
     game.summary = scoring;
     game.status = 'completed';
     completed = true;
