@@ -18,12 +18,20 @@ const state = {
   viewingPlayerId: null,
   needsPrivacyPrompt: false,
   selectedLetter: 'A',
-  websocket: null
+  websocket: null,
+  activeOverlay: null,
+  musicEnabled: false,
+  musicAvailable: false
 };
 
 const palette = ['#38bdf8', '#f97316', '#22c55e', '#a855f7'];
 
+let musicController = null;
+
 function setStage(stage) {
+  if (stage !== 'play') {
+    state.activeOverlay = null;
+  }
   if (state.stage === stage) {
     if (document.body.dataset.stage !== stage) {
       document.body.dataset.stage = stage;
@@ -87,6 +95,25 @@ function applyGameUpdate(game, options = {}) {
   if (!options.preserveStage && game) {
     setStage('play');
   }
+}
+
+function closeOverlay() {
+  if (!state.activeOverlay) {
+    return;
+  }
+  state.activeOverlay = null;
+  renderOverlays();
+  renderBoardPanel();
+}
+
+function openOverlay(name) {
+  if (state.activeOverlay === name) {
+    closeOverlay();
+    return;
+  }
+  state.activeOverlay = name;
+  renderOverlays();
+  renderBoardPanel();
 }
 
 function api(path, options = {}) {
@@ -165,6 +192,134 @@ function renderAuthActions() {
     }
     container.appendChild(navButton);
   }
+}
+
+function renderMusicToggle() {
+  const button = document.getElementById('music-toggle');
+  if (!button) {
+    return;
+  }
+  if (!state.musicAvailable) {
+    button.style.display = 'none';
+    button.classList.remove('music-on');
+    button.setAttribute('aria-pressed', 'false');
+    return;
+  }
+  button.style.display = 'inline-flex';
+  button.classList.toggle('music-on', state.musicEnabled);
+  button.textContent = state.musicEnabled ? 'Music: On' : 'Music: Off';
+  button.setAttribute('aria-pressed', state.musicEnabled ? 'true' : 'false');
+}
+
+function ensureMusicController() {
+  if (!state.musicAvailable) {
+    return null;
+  }
+  if (musicController) {
+    return musicController;
+  }
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) {
+    state.musicAvailable = false;
+    renderMusicToggle();
+    return null;
+  }
+  const context = new AudioContext();
+  const masterGain = context.createGain();
+  masterGain.gain.value = 0;
+  masterGain.connect(context.destination);
+  const oscillators = new Set();
+  const sequence = [
+    { freq: 261.63, duration: 1.3, type: 'sine', level: 0.5 },
+    { freq: 329.63, duration: 0.85, type: 'triangle', level: 0.45 },
+    { freq: 392.0, duration: 0.9, type: 'sine', level: 0.52 },
+    { freq: 523.25, duration: 1.4, type: 'triangle', level: 0.42 },
+    { freq: 392.0, duration: 1.1, type: 'sine', level: 0.5 },
+    { freq: 349.23, duration: 0.95, type: 'triangle', level: 0.46 },
+    { freq: 293.66, duration: 1.05, type: 'sine', level: 0.48 },
+    { freq: 261.63, duration: 1.6, type: 'triangle', level: 0.44 }
+  ];
+  let playing = false;
+  let timerId = null;
+
+  function playStep(index) {
+    if (!playing) {
+      return;
+    }
+    const note = sequence[index % sequence.length];
+    const oscillator = context.createOscillator();
+    oscillator.type = note.type || 'sine';
+    const gainNode = context.createGain();
+    const now = context.currentTime;
+    oscillator.frequency.setValueAtTime(note.freq, now);
+    gainNode.gain.setValueAtTime(0, now);
+    gainNode.gain.linearRampToValueAtTime(note.level || 0.55, now + 0.05);
+    gainNode.gain.setTargetAtTime(0, now + note.duration, 0.3);
+    oscillator.connect(gainNode);
+    gainNode.connect(masterGain);
+    oscillator.start();
+    oscillator.stop(now + note.duration + 0.6);
+    oscillators.add(oscillator);
+    oscillator.addEventListener('ended', () => {
+      oscillators.delete(oscillator);
+    });
+    timerId = setTimeout(() => playStep(index + 1), note.duration * 1000);
+  }
+
+  musicController = {
+    start() {
+      if (playing) {
+        return;
+      }
+      playing = true;
+      if (context.state === 'suspended') {
+        context.resume();
+      }
+      masterGain.gain.cancelScheduledValues(context.currentTime);
+      masterGain.gain.linearRampToValueAtTime(0.18, context.currentTime + 0.6);
+      playStep(0);
+    },
+    stop() {
+      if (!playing) {
+        return;
+      }
+      playing = false;
+      if (timerId) {
+        clearTimeout(timerId);
+        timerId = null;
+      }
+      oscillators.forEach((oscillator) => {
+        try {
+          oscillator.stop();
+        } catch (error) {
+          // ignored
+        }
+      });
+      oscillators.clear();
+      masterGain.gain.cancelScheduledValues(context.currentTime);
+      masterGain.gain.setTargetAtTime(0, context.currentTime, 0.35);
+    }
+  };
+
+  return musicController;
+}
+
+function toggleMusic() {
+  if (!state.musicAvailable) {
+    return;
+  }
+  const controller = ensureMusicController();
+  if (!controller) {
+    return;
+  }
+  if (state.musicEnabled) {
+    controller.stop();
+    state.musicEnabled = false;
+  } else {
+    controller.start();
+    state.musicEnabled = true;
+  }
+  renderMusicToggle();
 }
 
 function renderAuthPanel() {
@@ -254,58 +409,139 @@ function renderAuthPanel() {
 
 function renderProfilePanel() {
   const panel = document.getElementById('profile-panel');
+  panel.onclick = null;
   if (state.stage === 'auth') {
+    panel.classList.add('card');
+    panel.classList.remove('overlay-container', 'overlay-visible');
     panel.innerHTML = '';
     return;
   }
 
-  const username = state.user ? state.user.username : 'Guest player';
-  const gamesPlayed = state.user?.games_played ?? 0;
-  const averagePoints = Number(state.user?.average_points ?? 0);
-  const subtitle = state.user
-    ? `Games played: ${gamesPlayed} · Average score: ${averagePoints.toFixed(2)}`
-    : 'Playing without an account – progress will not be saved.';
+  if (state.stage === 'setup') {
+    panel.classList.add('card');
+    panel.classList.remove('overlay-container', 'overlay-visible');
+    const username = state.user ? state.user.username : 'Guest player';
+    const gamesPlayed = state.user?.games_played ?? 0;
+    const averagePoints = Number(state.user?.average_points ?? 0);
+    const subtitle = state.user
+      ? `Games played: ${gamesPlayed} · Average score: ${averagePoints.toFixed(2)}`
+      : 'Playing without an account – progress will not be saved.';
 
-  const badge = state.game ? `<div class="badge">${state.game.status.toUpperCase()}</div>` : '';
-  const dictionaryNote = state.dictionaryWords
-    ? `<p class="muted" style="margin-top: 0.75rem;">Dictionary cache: ${state.dictionaryWords.toLocaleString()} short words ready.</p>`
-    : '';
+    const badge = state.game ? `<div class="badge">${state.game.status.toUpperCase()}</div>` : '';
+    const dictionaryNote = state.dictionaryWords
+      ? `<p class="muted" style="margin-top: 0.75rem;">Dictionary cache: ${state.dictionaryWords.toLocaleString()} short words ready.</p>`
+      : '';
 
-  const actions = [];
-  if (state.stage === 'setup' && state.game && state.game.status !== 'completed') {
-    actions.push('<button class="button full" id="resume-game">Resume active match</button>');
-  }
-  if (state.stage === 'play') {
-    actions.push('<button class="button ghost full" id="back-to-setup">Back to setup</button>');
-  }
+    const actions = [];
+    if (state.game && state.game.status !== 'completed') {
+      actions.push('<button class="button full" id="resume-game">Resume active match</button>');
+    }
 
-  panel.innerHTML = `
-    <div class="flex-between" style="gap: 1rem; align-items: flex-start;">
-      <div>
-        <div class="section-title">${username}</div>
-        <p class="muted">${subtitle}</p>
+    panel.innerHTML = `
+      <div class="flex-between" style="gap: 1rem; align-items: flex-start;">
+        <div>
+          <div class="section-title">${username}</div>
+          <p class="muted">${subtitle}</p>
+        </div>
+        ${badge}
       </div>
-      ${badge}
-    </div>
-    ${dictionaryNote}
-    ${actions.length ? `<div class="grid-layout" style="margin-top:1rem; gap:0.75rem; grid-template-columns: 1fr;">${actions.join('')}</div>` : ''}
-  `;
+      ${dictionaryNote}
+      ${actions.length ? `<div class="grid-layout" style="margin-top:1rem; gap:0.75rem; grid-template-columns: 1fr;">${actions.join('')}</div>` : ''}
+    `;
 
-  const resume = panel.querySelector('#resume-game');
-  if (resume) {
-    resume.addEventListener('click', () => {
-      setStage('play');
-      renderAll();
-    });
+    const resume = panel.querySelector('#resume-game');
+    if (resume) {
+      resume.addEventListener('click', () => {
+        setStage('play');
+        renderAll();
+      });
+    }
+    return;
   }
 
-  const back = panel.querySelector('#back-to-setup');
-  if (back) {
-    back.addEventListener('click', () => {
-      setStage('setup');
-      renderAll();
+  // stage === 'play'
+  panel.classList.remove('card');
+  panel.classList.add('overlay-container');
+  if (state.activeOverlay !== 'profile') {
+    panel.classList.remove('overlay-visible');
+    panel.innerHTML = '';
+    return;
+  }
+
+  panel.classList.add('overlay-visible');
+
+  if (!state.game) {
+    panel.innerHTML = `
+      <div class="overlay-card card">
+        <div class="overlay-header">
+          <div>
+            <div class="section-title">Players &amp; Scores</div>
+            <p class="muted">Start a match to manage player boards.</p>
+          </div>
+          <button class="overlay-close" type="button" aria-label="Close players panel">✕</button>
+        </div>
+        <p class="muted">You don't have an active game yet.</p>
+      </div>
+    `;
+  } else {
+    const activeTurnPlayer = state.game.players[state.game.currentTurn] || null;
+    const viewingPlayer = state.game.players.find((player) => player.id === state.viewingPlayerId) || state.game.players[0];
+    const overlaySubtitle = state.game.status === 'completed'
+      ? 'Final standings for the finished match.'
+      : 'Every round uses a shared letter across private boards.';
+    const cards = state.game.players
+      .map((player, index) => {
+        const bits = [];
+        bits.push(player.type === 'ai' ? `AI · ${player.difficulty}` : 'Human');
+        if (viewingPlayer && viewingPlayer.id === player.id) {
+          bits.push('Your board');
+        }
+        if (state.game.status === 'active' && activeTurnPlayer && activeTurnPlayer.id === player.id) {
+          bits.push('Taking turn');
+        }
+        const info = bits.join(' • ');
+        const color = palette[index % palette.length];
+        const score = state.game.summary?.totals?.[player.id] ?? 0;
+        const active = activeTurnPlayer && activeTurnPlayer.id === player.id && state.game.status === 'active';
+        return `
+          <div class="player-card ${active ? 'active' : ''}" style="border-left: 4px solid ${color};">
+            <div>
+              <div class="name">${player.username}</div>
+              <div class="muted">${info}</div>
+            </div>
+            <div class="score">${score}</div>
+          </div>
+        `;
+      })
+      .join('');
+
+    const playerList = cards || '<p class="muted">Waiting for additional players to join.</p>';
+
+    panel.innerHTML = `
+      <div class="overlay-card card">
+        <div class="overlay-header">
+          <div>
+            <div class="section-title">Players &amp; Scores</div>
+            <p class="muted">${overlaySubtitle}</p>
+          </div>
+          <button class="overlay-close" type="button" aria-label="Close players panel">✕</button>
+        </div>
+        <div class="players">${playerList}</div>
+      </div>
+    `;
+  }
+
+  const close = panel.querySelector('.overlay-close');
+  if (close) {
+    close.addEventListener('click', () => {
+      closeOverlay();
     });
   }
+  panel.onclick = (event) => {
+    if (event.target === panel) {
+      closeOverlay();
+    }
+  };
 }
 
 function renderGameSetup() {
@@ -585,24 +821,6 @@ function renderBoardPanel() {
 
   const activeTurnPlayer = state.game.players[state.game.currentTurn] || null;
 
-  const playersMarkup = state.game.players
-    .map((player, index) => {
-      const score = state.game.summary?.totals?.[player.id] || 0;
-      const active = state.game.status === 'active' && activeTurnPlayer && activeTurnPlayer.id === player.id;
-      const viewing = player.id === viewingPlayer.id;
-      const color = palette[index % palette.length];
-      return `
-        <div class="player-card ${active ? 'active' : ''}" style="border-left: 4px solid ${color};">
-          <div>
-            <div class="name">${player.username}</div>
-            <div class="muted">${player.type === 'ai' ? `AI · ${player.difficulty}` : 'Human'}${viewing ? ' • Viewing' : ''}</div>
-          </div>
-          <div class="score">${score}</div>
-        </div>
-      `;
-    })
-    .join('');
-
   const letterColor = palette[(viewingIndex >= 0 ? viewingIndex : 0) % palette.length];
   const boardMarkup = board
     .map((row, rowIndex) =>
@@ -677,23 +895,46 @@ function renderBoardPanel() {
       `
       : '';
 
+  const navButtons = [
+    { key: 'profile', label: 'Players' },
+    { key: 'summary', label: 'Summary' },
+    { key: 'leaderboard', label: 'Leaderboard' }
+  ];
+
+  const navMarkup = navButtons
+    .map(({ key, label }) => {
+      const active = state.activeOverlay === key;
+      return `
+        <button type="button" class="nav-button ${active ? 'active' : ''}" data-overlay="${key}" aria-pressed="${active}">
+          ${label}
+        </button>
+      `;
+    })
+    .join('');
+
   panel.innerHTML = `
-    <div class="flex-between">
-      <div>
-        <div class="section-title">Game Board</div>
-        <p class="muted">Viewing board for <strong>${viewingPlayer.username}</strong></p>
+    <div class="board-shell">
+      <div class="board-top">
+        <div>
+          <div class="section-title">Your Board</div>
+          <p class="board-meta">Viewing board for <strong>${viewingPlayer.username}</strong></p>
+        </div>
+        <div class="play-nav">
+          <span class="badge">${state.game.status.toUpperCase()}</span>
+          ${navMarkup}
+        </div>
       </div>
-      <div class="badge">${state.game.status.toUpperCase()}</div>
+      <div class="board-panel-wrapper">
+        ${overlay}
+        <div class="board">${boardMarkup}</div>
+      </div>
+      <div>
+        <div class="section-title">${isForcedPlacement ? 'Shared Letter Placement' : 'Letter Selection'}</div>
+        ${isForcedPlacement ? `<div class="shared-letter-banner">Shared letter: <strong>${state.game.currentLetter}</strong></div>` : ''}
+        <div class="keyboard">${keyboard}</div>
+      </div>
+      <p class="board-meta" style="margin-top:0.5rem;">${statusMessage}</p>
     </div>
-    <div class="players">${playersMarkup}</div>
-    <div class="board-panel-wrapper">
-      ${overlay}
-      <div class="board">${boardMarkup}</div>
-    </div>
-    <div class="section-title" style="margin-top:1.5rem;">${isForcedPlacement ? 'Shared Letter Placement' : 'Letter Selection'}</div>
-    ${isForcedPlacement ? `<div class="shared-letter-banner">Shared letter: <strong>${state.game.currentLetter}</strong></div>` : ''}
-    <div class="keyboard">${keyboard}</div>
-    <p class="muted" style="margin-top:0.75rem;">${statusMessage}</p>
   `;
 
   const reveal = panel.querySelector('#reveal-board');
@@ -703,6 +944,12 @@ function renderBoardPanel() {
       renderBoardPanel();
     });
   }
+
+  panel.querySelectorAll('[data-overlay]').forEach((button) => {
+    button.addEventListener('click', () => {
+      openOverlay(button.dataset.overlay);
+    });
+  });
 
   if (canMove) {
     panel.querySelectorAll('.cell').forEach((cell) => {
@@ -753,84 +1000,116 @@ async function submitMove(row, col) {
 
 function renderSummaryPanel() {
   const panel = document.getElementById('summary-panel');
+  panel.onclick = null;
   if (state.stage !== 'play') {
+    panel.classList.add('card');
+    panel.classList.remove('overlay-container', 'overlay-visible');
     panel.innerHTML = '';
     return;
   }
 
-  if (!state.game) {
-    panel.innerHTML = `
-      <div class="section-title">Match Summary</div>
-      <p class="muted">Start a match to see scoring details.</p>
-    `;
+  panel.classList.remove('card');
+  panel.classList.add('overlay-container');
+
+  if (state.activeOverlay !== 'summary') {
+    panel.classList.remove('overlay-visible');
+    panel.innerHTML = '';
     return;
   }
 
-  if (!state.game.summary) {
+  panel.classList.add('overlay-visible');
+
+  let content = '';
+
+  if (!state.game) {
+    content = '<p class="muted">Start a match to see scoring details.</p>';
+  } else if (!state.game.summary) {
     const waitingCopy = state.game.status === 'active'
       ? 'Complete the game to view your scoring breakdown.'
       : 'No scoring details are available yet.';
-    panel.innerHTML = `
-      <div class="section-title">Match Summary</div>
-      <p class="muted">${waitingCopy}</p>
-    `;
-    return;
+    content = `<p class="muted">${waitingCopy}</p>`;
+  } else {
+    const viewingPlayer = state.game.players.find((player) => player.id === state.viewingPlayerId) || state.game.players[0];
+    if (!viewingPlayer) {
+      content = '<p class="muted">Select a player to review their results.</p>';
+    } else {
+      const totals = state.game.summary.totals || {};
+      const scoreboardLines = state.game.players
+        .map((player, index) => {
+          const score = totals[player.id] || 0;
+          const label = player.id === viewingPlayer.id ? 'Your final score' : 'Opponent score';
+          const color = palette[index % palette.length];
+          return `
+            <div class="summary-line">
+              <div>
+                <div class="label" style="color:${color};">${player.username}</div>
+                <div class="muted">${label}</div>
+              </div>
+              <div class="word">${score}</div>
+            </div>
+          `;
+        })
+        .join('');
+
+      const personalLines = state.game.summary.lines
+        .filter((line) => line.playerId === viewingPlayer.id || line.ownerIds?.includes(viewingPlayer.id))
+        .map((line) => {
+          const label = `${line.type === 'row' ? 'Row' : 'Column'} ${line.index + 1}`;
+          return `
+            <div class="summary-line">
+              <div>
+                <div class="label">${label}</div>
+                <div class="muted">${line.text}</div>
+              </div>
+              <div class="word">+${line.score}</div>
+            </div>
+          `;
+        })
+        .join('');
+
+      content = `
+        <p class="muted">Final totals</p>
+        <div class="summary">${scoreboardLines}</div>
+        <p class="muted" style="margin-top:1.25rem;">${viewingPlayer.username}'s longest words</p>
+        <div class="summary">${personalLines || '<p class="muted">No valid words were recorded.</p>'}</div>
+      `;
+    }
   }
 
-  const viewingPlayer = state.game.players.find((player) => player.id === state.viewingPlayerId) || state.game.players[0];
-  if (!viewingPlayer) {
-    panel.innerHTML = `
-      <div class="section-title">Match Summary</div>
-      <p class="muted">Select a player to review their results.</p>
-    `;
-    return;
-  }
-
-  const totals = state.game.summary.totals || {};
-  const scoreboardLines = state.game.players
-    .map((player, index) => {
-      const score = totals[player.id] || 0;
-      const label = player.id === viewingPlayer.id ? 'Your final score' : 'Opponent score';
-      const color = palette[index % palette.length];
-      return `
-        <div class="summary-line">
-          <div>
-            <div class="label" style="color:${color};">${player.username}</div>
-            <div class="muted">${label}</div>
-          </div>
-          <div class="word">${score}</div>
-        </div>
-      `;
-    })
-    .join('');
-
-  const personalLines = state.game.summary.lines
-    .filter((line) => line.playerId === viewingPlayer.id || line.ownerIds?.includes(viewingPlayer.id))
-    .map((line) => {
-      const label = `${line.type === 'row' ? 'Row' : 'Column'} ${line.index + 1}`;
-      return `
-        <div class="summary-line">
-          <div>
-            <div class="label">${label}</div>
-            <div class="muted">${line.text}</div>
-          </div>
-          <div class="word">+${line.score}</div>
-        </div>
-      `;
-    })
-    .join('');
+  const subtitle = state.game && state.game.summary
+    ? 'Review how each line scored once the match ends.'
+    : 'Scores appear here after the shared-letter match concludes.';
 
   panel.innerHTML = `
-    <div class="section-title">Match Summary</div>
-    <p class="muted">Final totals</p>
-    <div class="summary">${scoreboardLines}</div>
-    <p class="muted" style="margin-top:1.25rem;">${viewingPlayer.username}'s longest words</p>
-    <div class="summary">${personalLines || '<p class="muted">No valid words were recorded.</p>'}</div>
+    <div class="overlay-card card">
+      <div class="overlay-header">
+        <div>
+          <div class="section-title">Match Summary</div>
+          <p class="muted">${subtitle}</p>
+        </div>
+        <button class="overlay-close" type="button" aria-label="Close summary panel">✕</button>
+      </div>
+      ${content}
+    </div>
   `;
+
+  const close = panel.querySelector('.overlay-close');
+  if (close) {
+    close.addEventListener('click', () => {
+      closeOverlay();
+    });
+  }
+
+  panel.onclick = (event) => {
+    if (event.target === panel) {
+      closeOverlay();
+    }
+  };
 }
 
 function renderLeaderboardPanel() {
   const panel = document.getElementById('leaderboard-panel');
+  panel.onclick = null;
   const entries = state.leaderboard
     .map(
       (entry, index) => `
@@ -843,27 +1122,94 @@ function renderLeaderboardPanel() {
       `
     )
     .join('');
+
+  if (state.stage === 'auth') {
+    panel.classList.add('card');
+    panel.classList.remove('overlay-container', 'overlay-visible');
+    panel.innerHTML = '';
+    return;
+  }
+
+  if (state.stage === 'setup') {
+    panel.classList.add('card');
+    panel.classList.remove('overlay-container', 'overlay-visible');
+    panel.innerHTML = `
+      <div class="flex-between">
+        <div class="section-title">Global Leaderboard</div>
+        <button class="button ghost" id="refresh-leaderboard">Refresh</button>
+      </div>
+      <div class="leaderboard">${entries || '<p class="muted">No ranked players yet.</p>'}</div>
+    `;
+    const refresh = panel.querySelector('#refresh-leaderboard');
+    if (refresh) {
+      refresh.addEventListener('click', () => {
+        loadLeaderboard();
+      });
+    }
+    return;
+  }
+
+  // stage === 'play'
+  panel.classList.remove('card');
+  panel.classList.add('overlay-container');
+  if (state.activeOverlay !== 'leaderboard') {
+    panel.classList.remove('overlay-visible');
+    panel.innerHTML = '';
+    return;
+  }
+
+  panel.classList.add('overlay-visible');
   panel.innerHTML = `
-    <div class="flex-between">
-      <div class="section-title">Global Leaderboard</div>
-      <button class="button ghost" id="refresh-leaderboard">Refresh</button>
+    <div class="overlay-card card">
+      <div class="overlay-header">
+        <div>
+          <div class="section-title">Global Leaderboard</div>
+          <p class="muted">Average score ranking across all completed games.</p>
+        </div>
+        <button class="overlay-close" type="button" aria-label="Close leaderboard panel">✕</button>
+      </div>
+      <div class="leaderboard">${entries || '<p class="muted">No ranked players yet.</p>'}</div>
+      <button class="button ghost full" id="refresh-leaderboard">Refresh</button>
     </div>
-    <div class="leaderboard">${entries || '<p class="muted">No ranked players yet.</p>'}</div>
   `;
-  panel.querySelector('#refresh-leaderboard').addEventListener('click', () => {
-    loadLeaderboard();
-  });
+
+  const refresh = panel.querySelector('#refresh-leaderboard');
+  if (refresh) {
+    refresh.addEventListener('click', () => {
+      loadLeaderboard();
+    });
+  }
+
+  const close = panel.querySelector('.overlay-close');
+  if (close) {
+    close.addEventListener('click', () => {
+      closeOverlay();
+    });
+  }
+
+  panel.onclick = (event) => {
+    if (event.target === panel) {
+      closeOverlay();
+    }
+  };
+}
+
+function renderOverlays() {
+  renderProfilePanel();
+  renderSummaryPanel();
+  renderLeaderboardPanel();
+  const overlayActive = Boolean(state.activeOverlay && state.stage === 'play');
+  document.body.classList.toggle('overlay-active', overlayActive);
 }
 
 function renderAll() {
   document.body.dataset.stage = state.stage;
   renderAuthActions();
+  renderMusicToggle();
   renderAuthPanel();
-  renderProfilePanel();
   renderGameSetup();
   renderBoardPanel();
-  renderSummaryPanel();
-  renderLeaderboardPanel();
+  renderOverlays();
 }
 
 async function loadDictionaryStatus() {
@@ -928,7 +1274,12 @@ function connectWebSocket(gameId) {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (!state.game || state.stage !== 'play' || state.needsPrivacyPrompt) return;
+  if (event.key === 'Escape' && state.activeOverlay) {
+    event.preventDefault();
+    closeOverlay();
+    return;
+  }
+  if (!state.game || state.stage !== 'play' || state.needsPrivacyPrompt || state.activeOverlay) return;
   if (state.game.status !== 'active') return;
   const current = state.game.players[state.game.currentTurn];
   if (!current || current.id !== state.viewingPlayerId) return;
@@ -941,6 +1292,16 @@ window.addEventListener('keydown', (event) => {
 });
 
 async function bootstrap() {
+  state.musicAvailable = Boolean(window.AudioContext || window.webkitAudioContext);
+  const musicToggle = document.getElementById('music-toggle');
+  if (musicToggle) {
+    musicToggle.addEventListener('click', () => {
+      if (!state.musicAvailable) {
+        return;
+      }
+      toggleMusic();
+    });
+  }
   renderAll();
   await loadDictionaryStatus();
   await loadLeaderboard();

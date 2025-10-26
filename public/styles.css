@@ -61,6 +61,14 @@ button {
   margin-bottom: 2rem;
 }
 
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .brand {
   display: flex;
   flex-direction: column;
@@ -100,6 +108,11 @@ button {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 1.5rem;
+}
+
+body[data-stage='play'] main.grid-layout {
+  grid-template-columns: 1fr;
+  justify-items: center;
 }
 
 .flex {
@@ -144,6 +157,18 @@ button {
   color: var(--text);
 }
 
+.music-toggle {
+  padding-inline: 1rem;
+  min-width: 0;
+}
+
+.music-toggle.music-on {
+  border-color: rgba(56, 189, 248, 0.55);
+  color: var(--accent);
+  background: rgba(56, 189, 248, 0.12);
+  box-shadow: 0 12px 32px rgba(14, 165, 233, 0.25);
+}
+
 .button.full {
   width: 100%;
 }
@@ -183,13 +208,82 @@ button {
 
 .board {
   display: grid;
-  grid-template-columns: repeat(4, minmax(60px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  gap: 0.85rem;
   margin-top: 1.25rem;
 }
 
 .board-panel-wrapper {
   position: relative;
+}
+
+body[data-stage='play'] #board-panel {
+  grid-column: 1 / -1;
+  width: min(640px, 95vw);
+  margin: 0 auto;
+}
+
+body[data-stage='play'] .stage-play.card {
+  display: none;
+}
+
+body[data-stage='play'] #board-panel.card {
+  display: block;
+}
+
+.board-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.board-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.board-top .section-title {
+  margin-bottom: 0.15rem;
+}
+
+.board-meta {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.play-nav {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.play-nav .nav-button {
+  background: rgba(148, 163, 184, 0.18);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease, border 0.2s ease;
+}
+
+.play-nav .nav-button:hover {
+  transform: translateY(-1px);
+  background: rgba(56, 189, 248, 0.2);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+.play-nav .nav-button.active {
+  background: var(--accent);
+  color: #0f172a;
+  border-color: transparent;
+  box-shadow: 0 16px 34px rgba(14, 165, 233, 0.35);
 }
 
 .cell {
@@ -370,6 +464,83 @@ button {
   border-radius: 0.7rem;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.overlay-container {
+  display: none;
+}
+
+.overlay-visible {
+  display: flex;
+  position: fixed;
+  inset: 0;
+  padding: 2rem 1.5rem;
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(14px);
+  z-index: 80;
+  align-items: center;
+  justify-content: center;
+}
+
+.overlay-card {
+  width: min(520px, 92vw);
+  max-height: 85vh;
+  overflow-y: auto;
+  position: relative;
+}
+
+.overlay-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.overlay-close {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 999px;
+  color: var(--text);
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.overlay-close:hover {
+  border-color: rgba(56, 189, 248, 0.6);
+  color: var(--accent);
+}
+
+body.overlay-active {
+  overflow: hidden;
+}
+
+.overlay-card .players {
+  margin-top: 1.25rem;
+}
+
+.overlay-card .summary {
+  margin-top: 1rem;
+}
+
+.overlay-card .leaderboard {
+  margin-top: 1.25rem;
+}
+
+@media (max-width: 720px) {
+  .board {
+    grid-template-columns: repeat(4, minmax(56px, 1fr));
+    gap: 0.6rem;
+  }
+
+  .play-nav {
+    justify-content: flex-start;
+  }
+
+  .overlay-visible {
+    padding: 1.5rem 1rem;
+  }
 }
 
 @media (max-width: 800px) {
