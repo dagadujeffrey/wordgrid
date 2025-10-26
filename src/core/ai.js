@@ -26,7 +26,7 @@ async function evaluateMove(board, move, playerId) {
 }
 
 async function chooseMove(board, playerId, options = {}) {
-  const { difficulty = 'medium' } = options;
+  const { difficulty = 'medium', forcedLetter = null } = options;
   const availableCells = [];
   for (let row = 0; row < board.length; row += 1) {
     for (let col = 0; col < board[row].length; col += 1) {
@@ -41,14 +41,18 @@ async function chooseMove(board, playerId, options = {}) {
 
   if (difficulty === 'easy') {
     const cell = randomChoice(availableCells);
-    return { ...cell, letter: randomLetter() };
+    const letter = forcedLetter ? forcedLetter.toUpperCase() : randomLetter();
+    return { ...cell, letter };
   }
 
   const candidateMoves = [];
+  const letters = forcedLetter
+    ? [forcedLetter.toUpperCase()]
+    : Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index));
   for (const cell of availableCells) {
-    for (let code = 65; code <= 90; code += 1) {
-      candidateMoves.push({ row: cell.row, col: cell.col, letter: String.fromCharCode(code) });
-    }
+    letters.forEach((letter) => {
+      candidateMoves.push({ row: cell.row, col: cell.col, letter });
+    });
   }
 
   const scored = [];

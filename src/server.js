@@ -191,20 +191,7 @@ async function handleApi(req, res) {
       broadcastGame(game.id, { type: 'game:updated', game });
 
       if (!completed) {
-        const nextPlayer = game.players[game.currentTurn];
-        if (nextPlayer.type === 'ai') {
-          const sourceBoard = game.boards[nextPlayer.id] || [];
-          const board = sourceBoard.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
-          const aiMove = await chooseMove(board, nextPlayer.id, {
-            difficulty: nextPlayer.difficulty
-          });
-          const autoMove = {
-            ...aiMove,
-            playerId: nextPlayer.id
-          };
-          const aiResult = await recordMove(gameId, autoMove);
-          broadcastGame(game.id, { type: 'game:updated', game: aiResult.game });
-        }
+        await runAiTurns(game.id, game);
       }
       return;
     }
@@ -356,6 +343,38 @@ function broadcastGame(gameId, payload) {
       console.error('Broadcast error', error);
     }
   });
+}
+
+async function runAiTurns(gameId, initialGame) {
+  let snapshot = initialGame;
+  while (snapshot.status === 'active') {
+    const nextPlayer = snapshot.players[snapshot.currentTurn];
+    if (!nextPlayer || nextPlayer.type !== 'ai') {
+      break;
+    }
+    const sourceBoard = snapshot.boards[nextPlayer.id] || [];
+    const board = sourceBoard.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
+    const options = { difficulty: nextPlayer.difficulty };
+    if (snapshot.expectedAction === 'place' && snapshot.currentLetter) {
+      options.forcedLetter = snapshot.currentLetter;
+    }
+    const aiMove = await chooseMove(board, nextPlayer.id, options);
+    const resolvedLetter =
+      snapshot.expectedAction === 'place' && snapshot.currentLetter ? snapshot.currentLetter : aiMove.letter;
+    const autoMove = {
+      row: aiMove.row,
+      col: aiMove.col,
+      letter: resolvedLetter,
+      playerId: nextPlayer.id
+    };
+    const result = await recordMove(gameId, autoMove);
+    snapshot = result.game;
+    broadcastGame(gameId, { type: 'game:updated', game: snapshot });
+    if (result.completed) {
+      break;
+    }
+  }
+  return snapshot;
 }
 
 const server = http.createServer(handleRequest);

@@ -73,6 +73,13 @@ function syncViewingPlayer(game) {
 
 function applyGameUpdate(game, options = {}) {
   state.game = game;
+  if (game) {
+    if (game.expectedAction === 'place' && game.currentLetter) {
+      state.selectedLetter = game.currentLetter;
+    } else if (!state.selectedLetter) {
+      state.selectedLetter = 'A';
+    }
+  }
   syncViewingPlayer(game);
   if (game && game.status === 'completed') {
     state.needsPrivacyPrompt = false;
@@ -576,10 +583,12 @@ function renderBoardPanel() {
     return;
   }
 
+  const activeTurnPlayer = state.game.players[state.game.currentTurn] || null;
+
   const playersMarkup = state.game.players
     .map((player, index) => {
       const score = state.game.summary?.totals?.[player.id] || 0;
-      const active = state.game.status === 'active' && state.game.players[state.game.currentTurn].id === player.id;
+      const active = state.game.status === 'active' && activeTurnPlayer && activeTurnPlayer.id === player.id;
       const viewing = player.id === viewingPlayer.id;
       const color = palette[index % palette.length];
       return `
@@ -607,10 +616,14 @@ function renderBoardPanel() {
     )
     .join('');
 
+  const isForcedPlacement = state.game.expectedAction === 'place' && state.game.currentLetter;
+  const activeLetter = isForcedPlacement ? state.game.currentLetter : state.selectedLetter || 'A';
   const canMove =
     state.game.status === 'active' &&
     !state.needsPrivacyPrompt &&
-    state.game.players[state.game.currentTurn]?.id === viewingPlayer.id;
+    activeTurnPlayer &&
+    activeTurnPlayer.id === viewingPlayer.id;
+  const canSelectLetter = canMove && !isForcedPlacement;
 
   const statusMessage = (() => {
     if (state.game.status === 'waiting') {
@@ -620,18 +633,35 @@ function renderBoardPanel() {
       return 'Match complete. Review your final board and summary.';
     }
     if (canMove) {
-      return 'Select a letter and tap a cell to place it on your grid.';
+      if (isForcedPlacement) {
+        return `Place the shared letter ${state.game.currentLetter} anywhere on your grid.`;
+      }
+      return 'Choose the next shared letter and place it on your grid.';
     }
-    const current = state.game.players[state.game.currentTurn];
-    return `Waiting for ${current.username} to take a turn.`;
+    if (!activeTurnPlayer) {
+      return 'Waiting for the next move.';
+    }
+    if (state.game.expectedAction === 'place' && state.game.currentLetter) {
+      return `Waiting for ${activeTurnPlayer.username} to place the shared letter ${state.game.currentLetter}.`;
+    }
+    return `Waiting for ${activeTurnPlayer.username} to choose the next letter.`;
   })();
 
   const keyboard = Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index))
-    .map((letter) => `
-      <div class="key ${state.selectedLetter === letter ? 'active' : ''} ${canMove ? '' : 'disabled'}" data-letter="${letter}">
-        ${letter}
-      </div>
-    `)
+    .map((letter) => {
+      const classes = ['key'];
+      if (activeLetter === letter) {
+        classes.push('active');
+      }
+      if (!canSelectLetter || (isForcedPlacement && letter !== state.game.currentLetter)) {
+        classes.push('disabled');
+      }
+      return `
+        <div class="${classes.join(' ')}" data-letter="${letter}">
+          ${letter}
+        </div>
+      `;
+    })
     .join('');
 
   const overlay =
@@ -660,7 +690,8 @@ function renderBoardPanel() {
       ${overlay}
       <div class="board">${boardMarkup}</div>
     </div>
-    <div class="section-title" style="margin-top:1.5rem;">Letter Selection</div>
+    <div class="section-title" style="margin-top:1.5rem;">${isForcedPlacement ? 'Shared Letter Placement' : 'Letter Selection'}</div>
+    ${isForcedPlacement ? `<div class="shared-letter-banner">Shared letter: <strong>${state.game.currentLetter}</strong></div>` : ''}
     <div class="keyboard">${keyboard}</div>
     <p class="muted" style="margin-top:0.75rem;">${statusMessage}</p>
   `;
@@ -681,12 +712,15 @@ function renderBoardPanel() {
         if (board[row][col]) {
           return;
         }
-        submitMove(row, col, state.selectedLetter);
+        submitMove(row, col);
       });
     });
 
     panel.querySelectorAll('.key').forEach((key) => {
       key.addEventListener('click', () => {
+        if (!canSelectLetter) {
+          return;
+        }
         state.selectedLetter = key.dataset.letter;
         renderBoardPanel();
       });
@@ -694,8 +728,12 @@ function renderBoardPanel() {
   }
 }
 
-async function submitMove(row, col, letter) {
+async function submitMove(row, col) {
   if (!state.game) return;
+  const letter =
+    state.game.expectedAction === 'place' && state.game.currentLetter
+      ? state.game.currentLetter
+      : state.selectedLetter || 'A';
   try {
     const { game } = await api(`/api/games/${state.game.id}/move`, {
       method: 'POST',
@@ -894,6 +932,7 @@ window.addEventListener('keydown', (event) => {
   if (state.game.status !== 'active') return;
   const current = state.game.players[state.game.currentTurn];
   if (!current || current.id !== state.viewingPlayerId) return;
+  if (state.game.expectedAction === 'place' && state.game.currentLetter) return;
   const key = event.key.toUpperCase();
   if (key >= 'A' && key <= 'Z') {
     state.selectedLetter = key;

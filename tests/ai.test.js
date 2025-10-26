@@ -38,3 +38,9 @@ test('easy AI returns a plausible random move', async () => {
   assert.ok(move.row >= 0 && move.row < 4);
   assert.ok(move.col >= 0 && move.col < 4);
 });
+
+test('AI respects a forced shared letter choice', async () => {
+  const board = createEmptyBoard();
+  const move = await chooseMove(board, 'ai', { difficulty: 'medium', forcedLetter: 'z' });
+  assert.strictEqual(move.letter, 'Z');
+});

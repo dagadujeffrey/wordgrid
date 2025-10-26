@@ -19,33 +19,79 @@ function createTestGame() {
   });
 }
 
-test('records moves and completes game flow', async () => {
-  const game = createTestGame();
-  const players = game.players;
-  let updated = game;
-  let placementIndex = 0;
-
-  outer: for (let row = 0; row < 4; row += 1) {
-    for (let col = 0; col < 4; col += 1) {
-      for (const player of players) {
-        const move = {
-          playerId: player.id,
-          row,
-          col,
-          letter: String.fromCharCode(65 + (placementIndex % 26))
-        };
-        placementIndex += 1;
-        const result = await recordMove(game.id, move);
-        updated = result.game;
-        if (updated.status === 'completed') {
-          break outer;
-        }
+function findFirstEmptyCell(board) {
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board[row].length; col += 1) {
+      if (!board[row][col]) {
+        return { row, col };
       }
     }
+  }
+  throw new Error('Board is full');
+}
+
+test('records moves and completes game flow', async () => {
+  const game = createTestGame();
+  let updated = game;
+  let letterIndex = 0;
+  const sequence = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+  while (updated.status !== 'completed') {
+    const player = updated.players[updated.currentTurn];
+    const board = updated.boards[player.id];
+    const cell = findFirstEmptyCell(board);
+    const isSuggestion = updated.expectedAction === 'suggest';
+    const letter = isSuggestion
+      ? sequence[letterIndex % sequence.length]
+      : updated.currentLetter;
+    if (isSuggestion) {
+      letterIndex += 1;
+    }
+    const result = await recordMove(game.id, {
+      playerId: player.id,
+      row: cell.row,
+      col: cell.col,
+      letter
+    });
+    updated = result.game;
   }
 
   assert.strictEqual(updated.status, 'completed');
   assert.ok(updated.summary);
   const totalScore = Object.values(updated.summary.totals).reduce((sum, value) => sum + value, 0);
   assert.ok(totalScore >= 0);
+});
+
+test('enforces shared letter placements', async () => {
+  const game = createTestGame();
+  const [alice, bob] = game.players;
+
+  let result = await recordMove(game.id, {
+    playerId: alice.id,
+    row: 0,
+    col: 0,
+    letter: 'A'
+  });
+
+  assert.strictEqual(result.game.expectedAction, 'place');
+  await assert.rejects(
+    () =>
+      recordMove(game.id, {
+        playerId: bob.id,
+        row: 0,
+        col: 0,
+        letter: 'B'
+      }),
+    /shared letter/i
+  );
+
+  result = await recordMove(game.id, {
+    playerId: bob.id,
+    row: 0,
+    col: 0,
+    letter: 'A'
+  });
+
+  assert.strictEqual(result.game.expectedAction, 'suggest');
+  assert.strictEqual(result.game.currentLetter, null);
 });

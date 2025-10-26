@@ -42,6 +42,10 @@ function createGame({ mode, host, players = [], aiDifficulty = 'medium' }) {
     moves: [],
     players: gamePlayers,
     currentTurn: 0,
+    expectedAction: 'suggest',
+    currentLetter: null,
+    pendingPlacements: {},
+    currentSuggestionIndex: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     summary: null
@@ -92,9 +96,67 @@ async function recordMove(gameId, move) {
   if (!board) {
     throw new Error('Player board unavailable');
   }
-  applyMove(board, move);
-  game.moves.push({ ...move, timestamp: new Date().toISOString() });
-  game.currentTurn = (game.currentTurn + 1) % game.players.length;
+  const timestamp = new Date().toISOString();
+
+  if (game.expectedAction === 'place') {
+    if (!game.currentLetter) {
+      throw new Error('No shared letter to place');
+    }
+    const expectedLetter = game.currentLetter.toUpperCase();
+    if (move.letter && move.letter.toUpperCase() !== expectedLetter) {
+      throw new Error('Letter must match the shared letter choice');
+    }
+    const placement = { ...move, letter: expectedLetter, playerId: move.playerId };
+    applyMove(board, placement);
+    game.moves.push({ ...placement, timestamp });
+    game.pendingPlacements[move.playerId] = true;
+
+    const allPlaced = game.players.every((player) => game.pendingPlacements[player.id]);
+    if (allPlaced) {
+      game.expectedAction = 'suggest';
+      game.currentLetter = null;
+      game.pendingPlacements = {};
+      const suggestionIndex =
+        typeof game.currentSuggestionIndex === 'number' ? game.currentSuggestionIndex : playerIndex;
+      const nextIndex = (suggestionIndex + 1) % game.players.length;
+      game.currentTurn = nextIndex;
+      game.currentSuggestionIndex = null;
+    } else {
+      let nextIndex = (game.currentTurn + 1) % game.players.length;
+      while (game.pendingPlacements[game.players[nextIndex].id]) {
+        nextIndex = (nextIndex + 1) % game.players.length;
+      }
+      game.currentTurn = nextIndex;
+    }
+  } else {
+    if (!move.letter || !/^[a-z]$/i.test(move.letter)) {
+      throw new Error('A letter choice is required');
+    }
+    const chosenLetter = move.letter.toUpperCase();
+    const placement = { ...move, letter: chosenLetter, playerId: move.playerId };
+    applyMove(board, placement);
+    game.moves.push({ ...placement, timestamp });
+    game.expectedAction = 'place';
+    game.currentLetter = chosenLetter;
+    game.pendingPlacements = { [move.playerId]: true };
+    game.currentSuggestionIndex = playerIndex;
+
+    const allPlaced = game.players.every((player) => game.pendingPlacements[player.id]);
+    if (allPlaced) {
+      game.expectedAction = 'suggest';
+      game.currentLetter = null;
+      game.pendingPlacements = {};
+      game.currentTurn = (playerIndex + 1) % game.players.length;
+      game.currentSuggestionIndex = null;
+    } else {
+      let nextIndex = (game.currentTurn + 1) % game.players.length;
+      while (game.pendingPlacements[game.players[nextIndex].id]) {
+        nextIndex = (nextIndex + 1) % game.players.length;
+      }
+      game.currentTurn = nextIndex;
+    }
+  }
+
   game.updatedAt = new Date().toISOString();
 
   let completed = false;
