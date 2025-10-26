@@ -998,6 +998,97 @@ async function submitMove(row, col) {
   }
 }
 
+function renderSummaryBoard(game, player, color) {
+  const board = game.boards?.[player.id];
+  const summary = game.summary;
+  if (!board || !summary) {
+    return '';
+  }
+
+  const size = board.length;
+  const highlightMap = board.map((row) => row.map(() => false));
+  const rowScores = Array.from({ length: size }, () => null);
+  const colScores = Array.from({ length: size }, () => null);
+
+  const lines = Array.isArray(summary.lines) ? summary.lines : [];
+
+  lines
+    .filter((line) => line.playerId === player.id)
+    .forEach((line) => {
+      if (Array.isArray(line.positions)) {
+        line.positions.forEach(({ row, col }) => {
+          if (row >= 0 && row < size && col >= 0 && col < size) {
+            highlightMap[row][col] = true;
+          }
+        });
+      }
+      const payload = { word: line.text, score: line.score };
+      if (line.type === 'row') {
+        rowScores[line.index] = payload;
+      } else if (line.type === 'col') {
+        colScores[line.index] = payload;
+      }
+    });
+
+  const cellsMarkup = board
+    .map((row, rowIndex) => {
+      const cells = row
+        .map((cell, colIndex) => {
+          const classes = ['summary-board-cell'];
+          if (highlightMap[rowIndex][colIndex]) {
+            classes.push('highlight');
+          }
+          const letter = cell ? cell.letter : '';
+          return `
+            <div class="${classes.join(' ')}" style="grid-row:${rowIndex + 1};grid-column:${colIndex + 1};">
+              ${letter}
+            </div>
+          `;
+        })
+        .join('');
+      const lineScore = rowScores[rowIndex]
+        ? `<span class="word">${rowScores[rowIndex].word}</span><span class="score">+${rowScores[rowIndex].score}</span>`
+        : '<span class="muted">—</span>';
+      const rowScore = `
+        <div class="summary-board-row-score" style="grid-row:${rowIndex + 1};grid-column:${size + 1};">
+          ${lineScore}
+        </div>
+      `;
+      return cells + rowScore;
+    })
+    .join('');
+
+  const columnScores = colScores
+    .map((line, colIndex) => {
+      const lineScore = line
+        ? `<span class="word">${line.word}</span><span class="score">+${line.score}</span>`
+        : '<span class="muted">—</span>';
+      return `
+        <div class="summary-board-col-score" style="grid-row:${size + 1};grid-column:${colIndex + 1};">
+          ${lineScore}
+        </div>
+      `;
+    })
+    .join('');
+
+  const totals = summary.totals || {};
+  const totalScore = totals[player.id] || 0;
+
+  return `
+    <div class="summary-board-card">
+      <div class="summary-board-header">
+        <div class="label" style="color:${color};">${player.username}</div>
+        <div class="summary-board-total">Total: ${totalScore}</div>
+      </div>
+      <div class="summary-board-grid">
+        ${cellsMarkup}
+        ${columnScores}
+        <div class="summary-board-corner" style="grid-row:${size + 1};grid-column:${size + 1};"></div>
+      </div>
+    </div>
+  `;
+}
+
 function renderSummaryPanel() {
   const panel = document.getElementById('summary-panel');
   panel.onclick = null;
@@ -1051,27 +1142,15 @@ function renderSummaryPanel() {
         })
         .join('');
 
-      const personalLines = state.game.summary.lines
-        .filter((line) => line.playerId === viewingPlayer.id || line.ownerIds?.includes(viewingPlayer.id))
-        .map((line) => {
-          const label = `${line.type === 'row' ? 'Row' : 'Column'} ${line.index + 1}`;
-          return `
-            <div class="summary-line">
-              <div>
-                <div class="label">${label}</div>
-                <div class="muted">${line.text}</div>
-              </div>
-              <div class="word">+${line.score}</div>
-            </div>
-          `;
-        })
+      const boardsMarkup = state.game.players
+        .map((player, index) => renderSummaryBoard(state.game, player, palette[index % palette.length]))
         .join('');
 
       content = `
         <p class="muted">Final totals</p>
         <div class="summary">${scoreboardLines}</div>
-        <p class="muted" style="margin-top:1.25rem;">${viewingPlayer.username}'s longest words</p>
-        <div class="summary">${personalLines || '<p class="muted">No valid words were recorded.</p>'}</div>
+        <p class="muted" style="margin-top:1.25rem;">Final boards</p>
+        <div class="summary-boards">${boardsMarkup}</div>
       `;
     }
   }
