@@ -6,9 +6,6 @@ const CACHE_DIR = path.join(__dirname, '..', 'data');
 const WORDS_CACHE = path.join(CACHE_DIR, 'words_alpha.txt');
 const SEED_PATH = path.join(CACHE_DIR, 'dictionary-seed.json');
 
-const seedWords = readJson(SEED_PATH, []).map((word) => word.toString().toUpperCase());
-const allowedShortWords = new Set(seedWords.filter((word) => word.length === 2));
-
 let dictionary = null;
 
 async function downloadDictionary() {
@@ -40,15 +37,13 @@ async function loadDictionary() {
   if (content) {
     words = content
       .split(/\r?\n/)
-      .map((word) => word.trim().toUpperCase())
-      .filter((word) => word.length >= 2 && word.length <= 4)
-      .filter((word) => /^[A-Z]+$/.test(word))
-      .filter((word) => word.length !== 2 || allowedShortWords.has(word));
+      .map((word) => word.trim())
+      .filter((word) => word.length >= 2 && word.length <= 4);
   }
   if (!words.length) {
-    words = seedWords;
+    words = readJson(SEED_PATH, []).map((word) => word.toString());
   }
-  dictionary = new Set(words);
+  dictionary = new Set(words.map((word) => word.toUpperCase()));
   return dictionary;
 }
 
