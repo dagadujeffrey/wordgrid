@@ -1,0 +1,13 @@
+{
+  "name": "wordgrid",
+  "version": "1.0.0",
+  "description": "WordGrid is a turn-based multiplayer word strategy game featuring local hot-seat, online, and AI modes with a custom Node.js backend and vanilla Tailwind-inspired frontend.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js --watch",
+    "test": "node --test"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
